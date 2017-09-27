@@ -9,29 +9,75 @@
 #include <ctype.h>
 
 int singleProcess(char* expression, char singleEx, int location) {
-	printf("My expression is \"%c\"\n", singleEx);
-	int convert = singleEx - '0';
-	return convert;
+	int p[2];
+
+	int rc = pipe(p);
+	if (rc == -1) {
+		perror("pipe() failed");
+	}
+
+	int pid = fork();
+	if (pid == -1) {
+		perror("fork() failed");
+	}
+
+	if (pid == 0) {/*child*/
+		close(p[0]);
+		p[0] = -1;
+
+		int mypid = getpid();
+		printf("PID %d: My expression is \"%c\"\n", mypid, singleEx);
+		printf("PID %d: Sending \"%c\" on pipe to parent\n", mypid, singleEx);
+		fflush(NULL);
+
+		char buff[1];
+		buff[0] = singleEx;
+		int bytes_written = write(p[1], buff, 1);
+
+		if (bytes_written != 1) {
+			perror("write() failed");
+		}
+		_exit(0);
+	}
+
+	else { //parent
+		close(p[1]);
+		p[1] = -1;
+
+		char buffer[80];
+		int bytes_read = read(p[0], buffer, 1);
+
+		if (bytes_read == 0) {
+			perror("read() failed. the child process terminated without writing data");
+		}
+
+		int convert = buffer[0] - '0';
+		return convert;
+	}
 }
 
 int parenProcess(char* fullEx, char* singleEx, int location) {
 	printf("inside process: %s\n", singleEx);
-	printf("location: %d\n", location);
+	fflush(NULL);
+	// printf("location: %d\n", location);
+	// fflush(NULL);
 
 	//cut parentheses
 	char cutParen[location];
-	int i,j = 0;
+	int i = 0;
+	int j = 0;
 	while (i < location-1) {
 		cutParen[i] = singleEx[i+1];
 		i++;
 	}
-	cutParen[i+1] = '\0';
+	cutParen[location] = '\0';
 
-	printf("cut paren: %s\n", cutParen);
-	fflush(NULL);
+	//printf("cut paren: %s\n", cutParen);
+	//fflush(NULL);
 
 	int lengthEx = i;
 	char newEx[lengthEx];
+	int tempResult = 0;
 	i = 0;
 	while (i < lengthEx) {
 		int con = cutParen[i];
@@ -48,20 +94,24 @@ int parenProcess(char* fullEx, char* singleEx, int location) {
 				}
 			}
 			//send expression here
-			parenProcess(cutParen, newEx, j);
+			tempResult += parenProcess(cutParen, newEx, j);
 		}
 		if (isdigit(cutParen[i])) {
-			singleProcess(cutParen, cutParen[i], i);
+			tempResult += singleProcess(cutParen, cutParen[i], i);
 		}
 		i++;
 	}
 
-	return 1;
+	return tempResult;
 }
 
 int calculator(char* expression) {
-	printf("expression: %s\n", expression);
-	int i,j = 0;
+	int i = 0;
+	int j = 0;
+
+	int pid = getpid();
+	printf("PID %d: My expression is \"%s\"\n", pid, expression);
+	fflush(NULL);
 
 	i = 0;
 	while (expression[i] != '\0') {
@@ -70,13 +120,14 @@ int calculator(char* expression) {
 	i++;
 
 	int length = i;
-	printf("length: %d\n", length);
 
 	//cut parentheses
 	i = 0;
 	char cutParen[length];
 	while (i < length - 3) {
-		printf("char: %c\n", expression[i+1]);
+		#if DEBUG_MODE
+			printf("char: %c\n", expression[i+1]);
+		#endif
 		cutParen[i] = expression[i+1];
 		i++;
 	}
@@ -85,13 +136,17 @@ int calculator(char* expression) {
 	//get operator
 
 	char operator = cutParen[0];
-	printf("Starting \"%c\" operation\n", operator);
+	printf("PID %d: Starting \"%c\" operation\n", pid, operator);
 	fflush(NULL);
 
-	printf("cut paren: %s\n", cutParen);
+	#if DEBUG_MODE
+		printf("cut paren: %s\n", cutParen);
+		fflush(NULL);
+	#endif
 
 	i = 0;
 	char singleEx[20];
+	int result;
 	while(i < strlen(cutParen)) {
 		int con = cutParen[i];
 		if (con == 40) { //need to send whole parentheses
@@ -107,16 +162,16 @@ int calculator(char* expression) {
 				}
 			}
 			//send cutParen here
-			parenProcess(cutParen, singleEx, j);
+			result += parenProcess(cutParen, singleEx, j);
 			i += j;
 		}
 		if (isdigit(cutParen[i])) {
-			singleProcess(cutParen, cutParen[i], i);
+			result += singleProcess(cutParen, cutParen[i], i);
 		}
 		i++;
 	}
 
-	return 1;
+	return result;
 }
 
 int main(int argc, char* argv[]) {
