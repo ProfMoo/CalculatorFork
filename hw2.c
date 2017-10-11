@@ -92,6 +92,7 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 		convOp = (int)cutParen[0];
 		if(convOp != 42 && convOp != 43 && convOp != 45 && convOp != 47) {
 			printf("PID %d: ERROR: unknown \"%c\" operator; exiting\n", pid, convOp);
+			_exit(EXIT_FAILURE);
 			fflush(NULL);
 		}
 		else {
@@ -107,6 +108,7 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 			j++;
 		}
 		printf("PID %d: ERROR: unknown \"%s\" operator; exiting\n", pid, wrongOp);
+		_exit(EXIT_FAILURE);
 		fflush(NULL);
 	}
 
@@ -117,7 +119,7 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 	newEx = (char*)calloc(128, sizeof(char));
 	char* newExDig;
 	newExDig = (char*)calloc(128, sizeof(char));
-	int tempResult = 0;
+	//int tempResult = 0;
 	i = 0;
 	j = 0;
 	while (i < lengthEx) {
@@ -230,9 +232,9 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 		i += 1;
 	}
 	i = 0;
+	int status[numForks];
 	while (i < numForks) {
-		int status;
-		pid_t child_pid = waitpid(pidList[i], &status, 0);
+		pid_t child_pid = waitpid(pidList[i], &(status[i]), 0);
 
 		char* buffer;
 		buffer = (char*)calloc(128, sizeof(char));
@@ -241,6 +243,12 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 			//printf("pipeList[i][0]: %d\n", pipeList[i][0]);
 			//fflush(NULL);
 		#endif
+
+		/*here, check for weird exit statuses!!!
+		int status;
+
+
+		*/
 
 		int bytes_read = read(pipeList[i][0], buffer, 128);
 
@@ -286,6 +294,7 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 			else if (convOp == 47) {
 				if (get == 0) {
 					printf("PID %d: ERROR: division by zero is not allowed; exiting\n", pid);
+					_exit(1);
 					fflush(NULL);
 				}
 				else {
@@ -370,6 +379,17 @@ int calculator(char* expression) {
 			fflush(NULL);
 		#endif
 
+		int status;
+		wait(&status);
+		if(WIFEXITED(status)) { //when i exit with 1
+			_exit(1);
+			printf("Child's exit code %d\n", WEXITSTATUS(status));
+		}
+		else { 
+			printf("Child did not terminate with exit\n");
+			_exit(1);
+		}
+
 		int bytes_read = read(p[0], buffer, 128);
 
 		#if DEBUG_MODE
@@ -387,6 +407,44 @@ int calculator(char* expression) {
 	return answer;
 }
 
+char* getString(char* fileName) {
+	char* buff = NULL;
+	buff = calloc(128, sizeof(char));
+	FILE* fp = fopen(fileName, "r");
+
+	if (fp == NULL) {
+		perror("ERROR: fopen() failed");
+	}
+	if (fp != NULL) {
+		#if DEBUG_MODE
+			printf("reading %s\n", fileName);
+		#endif
+		//go to the end of the file	
+		if (fseek(fp, 0L, SEEK_END) == 0) {
+			long bufsize = ftell(fp); //get size of file
+			if ( bufsize == -1 ) {
+				perror( "ERROR: ftell() failed" );
+			}
+
+			buff = calloc(bufsize+1, sizeof(char));
+
+			if ( fseek(fp, 0L, SEEK_SET) != 0 ) {
+				perror( "ERROR: fseek() failed" );
+			}
+
+			size_t newLen = fread(buff, sizeof(char), bufsize, fp); //read into memory
+			if ( ferror(fp) != 0 ) {
+				perror(" ERROR: fread() failed" );
+			}
+			else {
+				buff[--newLen] = '\0';
+			}
+		}
+		fclose(fp);
+	}
+	return(buff);
+}
+
 int main(int argc, char* argv[]) {
 	#if DEBUG_MODE
 		printf("argc: %d\n", argc);
@@ -397,8 +455,10 @@ int main(int argc, char* argv[]) {
 		}
 	#endif
 
+	char* expression = getString(argv[1]);
+
 	int answer = 0;
-	answer = calculator(argv[1]);
+	answer = calculator(expression);
 	int pid = getpid();
 
 	if (argc != 2) {
@@ -406,7 +466,7 @@ int main(int argc, char* argv[]) {
 		return EXIT_FAILURE;
 	}
 
-	printf("PID %d: Processed \"%s\"; final answer is \"%d\"\n", pid, argv[1], answer);
+	printf("PID %d: Processed \"%s\"; final answer is \"%d\"\n", pid, expression, answer);
 	fflush(NULL);
 
 	return EXIT_SUCCESS;
