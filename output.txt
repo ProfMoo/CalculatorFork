@@ -1,0 +1,9 @@
+PID 28755: My expression is "(+ 15 8 9)"
+PID 28755: Starting "+" operation
+PID 28756: My expression is "15"
+PID 28756: Sending "15" on pipe to parent
+PID 28758: My expression is "9"
+PID 28758: Sending "9" on pipe to parent
+PID 28757: My expression is "8"
+PID 28757: Sending "8" on pipe to parent
+PID 28754: Processed "(+ 15 8 9)"; final answer is "32"

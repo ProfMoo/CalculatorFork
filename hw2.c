@@ -15,7 +15,7 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 	int pid = getpid();
 
 	//print expression
-	if (location <= 5) { //could make this depend on a value w eput into the function if needed
+	if (location <= 4) { //could make this depend on a value w eput into the function if needed
 		if (location == 1) {
 			printf("PID %d: My expression is \"%c\"\n", pid, *singleEx);
 			printf("PID %d: Sending \"%c\" on pipe to parent\n", pid, *singleEx);
@@ -66,13 +66,14 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 	//cut parentheses
 	i = 0;
 	char* cutParen;
-	cutParen = (char*)calloc(128, sizeof(char));
-	while (i < location-1) {
+	cutParen = (char*)calloc(location, sizeof(char));
+	while (i < location-2) {
 		cutParen[i] = singleEx[i+1];
+		//printf("cut paren: \"%s\"\n", cutParen);
 		i++;
 	}
 	int lengthEx = i;
-	cutParen[location] = '\0';
+	cutParen[i] = '\0';
 
 	#if DEBUG_MODE
 		printf("cut paren: %s\n", cutParen);
@@ -91,9 +92,10 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 	if (i == 1) {
 		convOp = (int)cutParen[0];
 		if(convOp != 42 && convOp != 43 && convOp != 45 && convOp != 47) {
+			pid = getpid();
 			printf("PID %d: ERROR: unknown \"%c\" operator; exiting\n", pid, convOp);
-			_exit(EXIT_FAILURE);
 			fflush(NULL);
+			_exit(EXIT_FAILURE);
 		}
 		else {
 			printf("PID %d: Starting \"%c\" operation\n", pid, convOp);
@@ -107,11 +109,15 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 			wrongOp[j] = cutParen[j];
 			j++;
 		}
+		pid = getpid();
 		printf("PID %d: ERROR: unknown \"%s\" operator; exiting\n", pid, wrongOp);
-		_exit(EXIT_FAILURE);
 		fflush(NULL);
+		_exit(EXIT_FAILURE);
 	}
 
+	//========================================================================================//
+	//split up the operation and send the operands into different children
+	//========================================================================================//
 
 	//parsing through expression and sending back into function
 	int numForks = 0;
@@ -130,19 +136,32 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 			fflush(NULL);
 		#endif
 
+		int numParen = 0;
 		if (con == 40) { //need to send whole parentheses
+			numParen++;
 			// printf("INSIDE PARENTHESES\n");
 			// fflush(NULL);
 			j = 0;
 			while(1) {
 				int con2 = cutParen[i+j];
 				newEx[j] = cutParen[i+j];
-				if (con2 == 41) { //end parentheses
+
+				#if DEBUG_MODE
+					//printf("digit: %d\n", cutParen[i+j]);
+					//fflush(NULL);
+				#endif
+
+				if (con2 == 41 && numParen == 1) { //end parentheses
+					newEx[++j] = '\0';
 					break;
 				}
-				else{
-					j++;
+				else if (con2 == 41 && numParen > 1) {
+					numParen--;
 				}
+				else if (con2 == 40 && j != 0) { //another parentheses
+					numParen++;
+				}
+				j++;
 			}
 			i+=j;
 
@@ -172,7 +191,7 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 				parenProcess(newEx, j, pipeList[numForks-1][1], 0);
 			}
 		}
-		else if (isdigit(cutParen[i]) || con == 45) {
+		else if (isdigit(cutParen[i]) || (con == 45 && isdigit(cutParen[i+1]))) {
 			// printf("INSIDE DIGIT\n");
 			// fflush(NULL);
 			j = 0;
@@ -193,6 +212,23 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 			}
 			newExDig[j++] = '\0';
 			i+=j;
+
+			//checking for zero here
+			if (strlen(newExDig) == 1) {
+				int con3 = newExDig[0];
+				#if DEBUG_MODE
+					printf("con3: %d\n", con3);
+					printf("numForks: %d\n", numForks);
+					printf("convOp: %c\n", convOp);
+					fflush(NULL);
+				#endif
+				if (con3 == 48 && numForks > 0 && convOp == '/') {
+					pid = getpid();
+					printf("PID %d: ERROR: division by zero is not allowed; exiting\n", pid);
+					fflush(NULL);
+					_exit(1);
+				}
+			}
 
 			int rc = pipe(pipeList[numForks]);
 			if (rc == -1) {
@@ -221,9 +257,22 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 		}
 	}
 
-	//check for num of operands here using numForks
+	//========================================================================================//
+	//wait for a return from all the children
+	//========================================================================================//
 
-	//reading in the results after waiting
+	//check here for the correct amount of operands
+	#if DEBUG_MODE
+		printf("numForks: %d\n", numForks);
+	#endif
+	if (numForks < 2) {
+		pid = getpid();
+		printf("PID %d: ERROR: not enough operands; exiting\n", pid);
+		fflush(NULL);
+		_exit(1);
+	}
+
+	fflush(NULL);
 	i = 0;
 	char** results;
 	results = (char**)calloc(20, sizeof(char*));
@@ -235,20 +284,15 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 	int status[numForks];
 	while (i < numForks) {
 		pid_t child_pid = waitpid(pidList[i], &(status[i]), 0);
+		if (WEXITSTATUS(status[i]) != 0) {
+			pid = getpid();
+			printf("PID %d: child terminated with nonzero exit status 1 [child pid %d]\n", pid, pidList[i]);
+			fflush(NULL);
+			_exit(1);
+		}
 
 		char* buffer;
 		buffer = (char*)calloc(128, sizeof(char));
-
-		#if DEBUG_MODE
-			//printf("pipeList[i][0]: %d\n", pipeList[i][0]);
-			//fflush(NULL);
-		#endif
-
-		/*here, check for weird exit statuses!!!
-		int status;
-
-
-		*/
 
 		int bytes_read = read(pipeList[i][0], buffer, 128);
 
@@ -272,6 +316,10 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 		i += 1;
 	}
 
+	//========================================================================================//
+	//get the results from the children and calculate a single combined answer
+	//========================================================================================//
+
 	//calculating right answer
 	i = 0;
 	int tempAnswer = 0;
@@ -293,9 +341,10 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 			}
 			else if (convOp == 47) {
 				if (get == 0) {
+					pid = getpid();
 					printf("PID %d: ERROR: division by zero is not allowed; exiting\n", pid);
-					_exit(1);
 					fflush(NULL);
+					_exit(1);
 				}
 				else {
 					tempAnswer /= get;
@@ -309,6 +358,9 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 		#endif
 	}
 
+	//========================================================================================//
+	//send the correct answer back through the pipe
+	//========================================================================================//
 
 	//sending right answer back
 	#if DEBUG_MODE
@@ -317,7 +369,9 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 	#endif
 
 	if (first == 0) {
+		pid = getpid();
 		printf("PID %d: Processed \"(%s)\"; sending \"%d\" on pipe to parent\n", pid, cutParen, tempAnswer);
+		fflush(NULL);
 	}
 	char buff[128];
 	sprintf(buff, "%d", tempAnswer);
@@ -331,26 +385,30 @@ void parenProcess(char* singleEx, int location, int pipeBack, int first) {
 	if (bytes_written == -1) {
 		perror("write() failed");
 	}
-	//say returning expression here, with result
+
 	_exit(0);
 }
 
-int calculator(char* expression) {
+char* calculator(char* expression, char* pidback) {
 	int i = 0;
 
 	i = 0;
 	while (expression[i] != '\0') {
 		i++;
 	}
-	i++;
+	i+=2;
 
 	int length = i;
-	int answer = 0;
-
 	int p[2];
+	int p2[2];
 
 	int rc = pipe(p);
 	if (rc == -1) {
+		perror("pipe() failed");
+	}
+
+	int rc2 = pipe(p2);
+	if (rc2 == -1) {
 		perror("pipe() failed");
 	}
 
@@ -362,6 +420,18 @@ int calculator(char* expression) {
 	if (pid == 0) {/*child*/
 		close(p[0]);
 		p[0] = -1;
+		close(p2[0]);
+		p2[0] = -1;
+		
+		int sendpid = getpid();
+		char pidy[5];
+		sprintf(pidy, "%d", sendpid);
+
+		int bytes_written = write(p2[1], pidy, 128);
+
+		if (bytes_written == -1) {
+			perror("ERROR: write() failed");
+		}
 
 		parenProcess(expression, length-2, p[1], 1);
 
@@ -371,8 +441,12 @@ int calculator(char* expression) {
 	else { //parent
 		close(p[1]);
 		p[1] = -1;
+		close(p2[1]);
+		p2[1] = -1;
 
-		char buffer[128];
+		char* buffer;
+		buffer = (char*)calloc(128, sizeof(char));
+		char pidd[5];
 
 		#if DEBUG_MODE
 			printf("pipe: %d\n", p[0]);
@@ -382,8 +456,9 @@ int calculator(char* expression) {
 		int status;
 		wait(&status);
 		if(WIFEXITED(status)) { //when i exit with 1
-			_exit(1);
-			printf("Child's exit code %d\n", WEXITSTATUS(status));
+			if (WEXITSTATUS(status) != 0) {
+				_exit(1);
+			}
 		}
 		else { 
 			printf("Child did not terminate with exit\n");
@@ -401,10 +476,16 @@ int calculator(char* expression) {
 			perror("read() failed. the child process terminated without writing data");
 		}
 
-		answer = (int)strtol(buffer, (char**)NULL, 10);
+		int bytes_read2 = read(p2[0], pidd, 128);
+		if (bytes_read2 == 0) {
+			perror("read() failed. the child process terminated without writing data");
+		}
+		strcpy(pidback,pidd);
+
+		return buffer;
 	}
 
-	return answer;
+	//return buffer;
 }
 
 char* getString(char* fileName) {
@@ -455,18 +536,20 @@ int main(int argc, char* argv[]) {
 		}
 	#endif
 
-	char* expression = getString(argv[1]);
-
-	int answer = 0;
-	answer = calculator(expression);
-	int pid = getpid();
-
 	if (argc != 2) {
-		perror("ERROR: Invalid arguments\nUSAGE: ./a.out <input-file>");
+		fprintf(stderr, "ERROR: Invalid arguments\nUSAGE: ./a.out <input-file>");
 		return EXIT_FAILURE;
 	}
 
-	printf("PID %d: Processed \"%s\"; final answer is \"%d\"\n", pid, expression, answer);
+	char* expression = getString(argv[1]);
+
+	char* answer;
+	answer = (char*)calloc(64, sizeof(char));
+	char pidy[5];
+	answer = calculator(expression, pidy);
+	//int pid = getpid();
+
+	printf("PID %s: Processed \"%s\"; final answer is \"%s\"", pidy, expression, answer);
 	fflush(NULL);
 
 	return EXIT_SUCCESS;
